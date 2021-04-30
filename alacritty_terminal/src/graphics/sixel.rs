@@ -262,10 +262,10 @@ pub struct Parser {
     height: usize,
 
     /// Current picture pixels.
-    pixels: Vec<ColorRegister>,
+    pixels: Vec<u32>,
 
     /// Indicates the register color for empty pixels.
-    background: ColorRegister,
+    background: u32,
 
     /// RGB values for every register.
     color_registers: Vec<Rgb>,
@@ -304,7 +304,7 @@ impl Parser {
         //  - For any other value, the background is the color register 0.
 
         let ps2 = params.iter().nth(1).and_then(|param| param.iter().next().copied()).unwrap_or(0);
-        parser.background = if ps2 == 1 { REG_TRANSPARENT } else { ColorRegister(0) };
+        parser.background = if ps2 == 1 { REG_TRANSPARENT.0.into() } else { ColorRegister(0).0.into() };
 
         if let Some(color_registers) = shared_palette {
             parser.color_registers = color_registers;
@@ -455,7 +455,7 @@ impl Parser {
             for dot in sixel.dots() {
                 if dot {
                     for pixel in &mut self.pixels[index..index + repeat] {
-                        *pixel = self.selected_color_register;
+                        *pixel = self.selected_color_register.0 as u32;
                     }
                 }
 
@@ -484,10 +484,10 @@ impl Parser {
 
         for &register in &self.pixels {
             let pixel = {
-                if register == REG_TRANSPARENT {
+                if register == REG_TRANSPARENT.0 as u32 {
                     [0; 4]
                 } else {
-                    match self.color_registers.get(register.0 as usize) {
+                    match self.color_registers.get(register as usize) {
                         None => [0, 0, 0, 255],
                         Some(color) => [color.r, color.g, color.b, 255],
                     }
