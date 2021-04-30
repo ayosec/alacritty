@@ -261,10 +261,10 @@ pub struct Parser {
     /// Current picture height.
     height: usize,
 
-    /// Current picture pixels.
+    /// Current picture pixels; each pixel is either a register (replacement mode) or RGBA value (additive blending mode).
     pixels: Vec<u32>,
 
-    /// Indicates the register color for empty pixels.
+    /// Indicates the register color (replacement mode) or RGBA value (additive blending) for empty pixels.
     background: u32,
 
     /// RGB values for every register.
@@ -281,6 +281,9 @@ pub struct Parser {
 
     /// Vertical position of the active sixel.
     y: usize,
+
+    /// Indicates if additive blending (rather than replacement) should be used to update a sixel.
+    additive_blending: bool,
 }
 
 impl Parser {
@@ -302,9 +305,18 @@ impl Parser {
         //
         //  - If it is set to `1`, the background is transparent.
         //  - For any other value, the background is the color register 0.
+        //
+        // And add an extension:
+        //
+        //   3   additively blend (rather than replace) one-valued pixels
 
         let ps2 = params.iter().nth(1).and_then(|param| param.iter().next().copied()).unwrap_or(0);
-        parser.background = if ps2 == 1 { REG_TRANSPARENT.0.into() } else { ColorRegister(0).0.into() };
+        parser.background = match ps2 {
+            1 => REG_TRANSPARENT.0.into(),
+            3 => 0,
+            _ => ColorRegister(0).0.into(),
+        };
+        parser.additive_blending = ps2 == 3;
 
         if let Some(color_registers) = shared_palette {
             parser.color_registers = color_registers;
@@ -455,7 +467,11 @@ impl Parser {
             for dot in sixel.dots() {
                 if dot {
                     for pixel in &mut self.pixels[index..index + repeat] {
-                        *pixel = self.selected_color_register.0 as u32;
+                        if self.additive_blending {
+                            *pixel = *pixel | ((1 << self.selected_color_register.0 as u32) << 8) | 0xff;
+                        } else {
+                            *pixel = self.selected_color_register.0 as u32;
+                        }
                     }
                 }
 
@@ -484,7 +500,9 @@ impl Parser {
 
         for &register in &self.pixels {
             let pixel = {
-                if register == REG_TRANSPARENT.0 as u32 {
+                if self.additive_blending {
+                    [ ((register >> 24) & 0xff) as u8, ((register >> 16) & 0xff) as u8, ((register >> 8) & 0xff) as u8, 255]
+                } else if register == REG_TRANSPARENT.0 as u32 {
                     [0; 4]
                 } else {
                     match self.color_registers.get(register as usize) {
