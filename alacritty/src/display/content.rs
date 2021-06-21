@@ -187,7 +187,7 @@ impl<'a> Iterator for RenderableContent<'a> {
 pub struct RenderableCell {
     pub character: char,
     pub zerowidth: Option<Vec<char>>,
-    pub graphic: Option<GraphicCell>,
+    pub graphic: Option<Vec<GraphicCell>>,
     pub point: Point<usize>,
     pub fg: Rgb,
     pub bg: Rgb,
@@ -259,7 +259,7 @@ impl RenderableCell {
 
         RenderableCell {
             zerowidth: cell.zerowidth().map(|zerowidth| zerowidth.to_vec()),
-            graphic: cell.graphic().cloned(),
+            graphic: cell.graphics().map(|s| s.to_owned()),
             flags: cell.flags,
             character,
             bg_alpha,

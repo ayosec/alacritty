@@ -96,6 +96,9 @@ pub struct GraphicData {
 
     /// Pixels data.
     pub pixels: Vec<u8>,
+
+    /// This image deletes existing images at the same location
+    pub delete: bool,
 }
 
 /// Queues to add or to remove the textures in the display.

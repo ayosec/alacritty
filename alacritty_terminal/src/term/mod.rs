@@ -1807,7 +1807,7 @@ impl<T: EventListener> Handler for Term<T> {
         let width = graphic.width as u16;
         let height = graphic.height as u16;
 
-        if width == 0 || height == 0 {
+        if (width == 0 || height == 0) && !graphic.delete {
             return;
         }
 
@@ -1850,6 +1850,11 @@ impl<T: EventListener> Handler for Term<T> {
 
                 Line(top)
             };
+
+            // Possibly delete any existing graphics
+            if graphic.delete {
+                self.grid[line][Column(left)].remove_graphics();
+            }
 
             // Store a reference to the graphic in the first column.
             let graphic_cell = GraphicCell { texture: texture.clone(), offset_x: 0, offset_y };

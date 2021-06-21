@@ -57,7 +57,7 @@ struct CellExtra {
     zerowidth: Vec<char>,
 
     #[serde(skip)]
-    graphic: Option<Box<GraphicCell>>,
+    graphic: Option<Vec<GraphicCell>>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -107,15 +107,22 @@ impl Cell {
 
     /// Graphic present in the cell.
     #[inline]
-    pub fn graphic(&self) -> Option<&GraphicCell> {
+    pub fn graphics(&self) -> Option<&[GraphicCell]> {
         self.extra.as_deref().and_then(|extra| extra.graphic.as_deref())
+    }
+
+    /// Remove graphic data from the cell.
+    #[inline]
+    pub fn remove_graphics(&mut self) {
+        self.extra.as_mut().and_then(|extra: &mut Box<CellExtra>| extra.graphic.as_mut().and_then(|graphic: &mut Vec<GraphicCell>| { graphic.clear(); Some(graphic) }));
+        self.flags_mut().remove(Flags::GRAPHICS);
     }
 
     /// Write the graphic data in the cell.
     #[inline]
     pub fn set_graphic(&mut self, graphic_cell: GraphicCell) {
-        let mut extra = self.extra.get_or_insert_with(Default::default);
-        extra.graphic = Some(Box::new(graphic_cell));
+        let extra = self.extra.get_or_insert_with(Default::default);
+        extra.graphic.get_or_insert_with(Default::default).push(graphic_cell);
 
         self.flags_mut().insert(Flags::GRAPHICS);
     }

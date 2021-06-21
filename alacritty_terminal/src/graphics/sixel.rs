@@ -281,6 +281,9 @@ pub struct Parser {
 
     /// Vertical position of the active sixel.
     y: usize,
+
+    /// This image should delete all other images at the same location
+    delete: bool,
 }
 
 impl Parser {
@@ -289,6 +292,22 @@ impl Parser {
         trace!("Start Sixel parser");
 
         let mut parser = Parser::default();
+
+        fn param_or_zero(p: Option<&[u16]>) -> u16 {
+            p.and_then(|param| param.iter().next().copied()).unwrap_or(0)
+        }
+
+        // According to the Sixel reference, the first parameter (Ps1)
+        // is the macro parameter. Macros were deprecated, and
+        // Alacritty doesn’t support them. However, we reuse this
+        // field to indicate that this image should delete any
+        // existing images with the same anchor point, rather than
+        // overlapping them.
+        //
+        //   0   This image overlaps any existing images
+        // 100   This image replaces any existing images at this location
+        let mut iter = params.iter();
+        parser.delete = param_or_zero(iter.next()) == 100;
 
         // According to the Sixel reference, the second parameter (Ps2) is
         // the background selector. It controls how to show pixels without
@@ -302,8 +321,7 @@ impl Parser {
         //
         //  - If it is set to `1`, the background is transparent.
         //  - For any other value, the background is the color register 0.
-
-        let ps2 = params.iter().nth(1).and_then(|param| param.iter().next().copied()).unwrap_or(0);
+        let ps2 = param_or_zero(iter.next());
         parser.background = if ps2 == 1 { REG_TRANSPARENT } else { ColorRegister(0) };
 
         if let Some(color_registers) = shared_palette {
@@ -503,6 +521,7 @@ impl Parser {
             width: self.width,
             color_type: ColorType::Rgba,
             pixels: rgba_pixels,
+            delete: self.delete,
         };
 
         Ok((data, self.color_registers))
