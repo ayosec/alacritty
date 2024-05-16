@@ -603,6 +603,16 @@ pub struct ActionContext<'a, N, T> {
 
 impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionContext<'a, N, T> {
     #[inline]
+    fn bookmark_prev(&mut self) {
+        self.jump_to_bookmark(true);
+    }
+
+    #[inline]
+    fn bookmark_next(&mut self) {
+        self.jump_to_bookmark(false);
+    }
+
+    #[inline]
     fn write_to_pty<B: Into<Cow<'static, [u8]>>>(&self, val: B) {
         self.notifier.notify(val);
     }
@@ -1302,6 +1312,38 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 }
 
 impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
+    fn jump_to_bookmark(&mut self, prev: bool) {
+        let vi_mode = self.terminal.mode().contains(TermMode::VI);
+        let grid = self.terminal.grid();
+        let display_offset = grid.display_offset() as i32;
+
+        let valid_range = grid.topmost_line()..grid.bottommost_line();
+        let direction = if prev { -1 } else { 1 };
+
+        let mut line;
+        if vi_mode {
+            line = Line(self.terminal.vi_mode_cursor.point.line.0 + direction);
+        } else {
+            line = Line(-display_offset + direction);
+        }
+
+        while valid_range.contains(&line) {
+            if let Some(column) = grid[line].bookmark() {
+                if vi_mode {
+                    self.terminal.vi_goto_point(Point::new(line, column));
+                } else {
+                    let scroll = Scroll::Delta(-line.0 - display_offset);
+                    self.terminal.scroll_display(scroll);
+                }
+
+                *self.dirty = true;
+                return;
+            }
+
+            line += direction;
+        }
+    }
+
     fn update_search(&mut self) {
         let regex = match self.search_state.regex() {
             Some(regex) => regex,

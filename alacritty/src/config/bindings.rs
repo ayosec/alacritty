@@ -86,6 +86,10 @@ impl<T: Eq> Binding<T> {
 
 #[derive(ConfigDeserialize, Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    BookmarkPrev,
+
+    BookmarkNext,
+
     /// Write an escape sequence.
     #[config(skip)]
     Esc(String),

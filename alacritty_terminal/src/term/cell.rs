@@ -13,7 +13,9 @@ use crate::vte::ansi::{Color, Hyperlink as VteHyperlink, NamedColor};
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct Flags: u16 {
+    pub struct Flags: u32 {
+        const BOOKMARK = 1 << 29;
+
         const INVERSE                   = 0b0000_0000_0000_0001;
         const BOLD                      = 0b0000_0000_0000_0010;
         const ITALIC                    = 0b0000_0000_0000_0100;

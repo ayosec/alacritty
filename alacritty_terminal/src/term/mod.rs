@@ -33,6 +33,8 @@ pub mod cell;
 pub mod color;
 pub mod search;
 
+mod bookmarks;
+
 /// Minimum number of columns.
 ///
 /// A minimum of 2 is necessary to hold fullwidth unicode characters.
@@ -2338,6 +2340,15 @@ impl<T: EventListener> Handler for Term<T> {
             crate::graphics::parse_sixel(self, *parser);
         } else {
             dbg!("[unhandled dcs_unhook]");
+        }
+    }
+
+    fn osc_unhandled(&mut self, params: &[&[u8]], _terminator: &str) {
+        match params.get(0) {
+            // Bookmarks.
+            Some(&b"MARK") => bookmarks::osc_execute(self, params),
+
+            _ => (),
         }
     }
 }
