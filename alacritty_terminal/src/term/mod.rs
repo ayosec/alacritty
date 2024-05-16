@@ -2348,6 +2348,12 @@ impl<T: EventListener> Handler for Term<T> {
             // Bookmarks.
             Some(&b"MARK") => bookmarks::osc_execute(self, params),
 
+            Some(&b"1337") => {
+                if let Some(graphic) = crate::graphics::osc1337::parse(params) {
+                    crate::graphics::insert_graphic(self, graphic, None);
+                }
+            },
+
             _ => (),
         }
     }

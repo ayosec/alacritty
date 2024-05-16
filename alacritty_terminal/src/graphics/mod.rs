@@ -1,6 +1,7 @@
 //! This module implements the logic to manage graphic items included in a
 //! `Grid` instance.
 
+pub mod osc1337;
 pub mod sixel;
 
 use std::collections::HashSet;
@@ -11,6 +12,7 @@ use std::{cmp, mem};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use image::DynamicImage;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 
@@ -191,6 +193,32 @@ pub enum ColorType {
     Rgba,
 }
 
+/// Unit to specify a dimension to resize the graphic.
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy, Debug)]
+pub enum ResizeParameter {
+    /// Dimension is computed from the original graphic dimensions.
+    Auto,
+
+    /// Size is specified in number of grid cells.
+    Cells(u32),
+
+    /// Size is specified in number pixels.
+    Pixels(u32),
+
+    /// Size is specified in a percent of the window.
+    WindowPercent(u32),
+}
+
+/// Dimensions to resize a graphic.
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy, Debug)]
+pub struct ResizeCommand {
+    pub width: ResizeParameter,
+
+    pub height: ResizeParameter,
+
+    pub preserve_aspect_ratio: bool,
+}
+
 /// Defines a single graphic read from the PTY.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Eq, PartialEq, Clone, Debug)]
@@ -212,6 +240,9 @@ pub struct GraphicData {
 
     /// Indicate if there are no transparent pixels.
     pub is_opaque: bool,
+
+    /// Render graphic in a different size.
+    pub resize: Option<ResizeCommand>,
 }
 
 impl GraphicData {
@@ -251,6 +282,122 @@ impl GraphicData {
         }
 
         true
+    }
+
+    pub fn from_dynamic_image(id: GraphicId, image: DynamicImage) -> Self {
+        let color_type;
+        let width;
+        let height;
+        let pixels;
+
+        match image {
+            DynamicImage::ImageRgb8(image) => {
+                color_type = ColorType::Rgb;
+                width = image.width() as usize;
+                height = image.height() as usize;
+                pixels = image.into_raw();
+            },
+
+            DynamicImage::ImageRgba8(image) => {
+                color_type = ColorType::Rgba;
+                width = image.width() as usize;
+                height = image.height() as usize;
+                pixels = image.into_raw();
+            },
+
+            _ => {
+                // Non-RGB image. Convert it to RGBA.
+                let image = image.into_rgba8();
+                color_type = ColorType::Rgba;
+                width = image.width() as usize;
+                height = image.height() as usize;
+                pixels = image.into_raw();
+            },
+        }
+
+        GraphicData { id, width, height, color_type, pixels, is_opaque: false, resize: None }
+    }
+
+    /// Resize the graphic according to the dimensions in the `resize` field.
+    pub fn resized(
+        self,
+        cell_width: usize,
+        cell_height: usize,
+        view_width: usize,
+        view_height: usize,
+    ) -> Option<Self> {
+        let resize = match self.resize {
+            Some(resize) => resize,
+            None => return Some(self),
+        };
+
+        if (resize.width == ResizeParameter::Auto && resize.height == ResizeParameter::Auto)
+            || self.height == 0
+            || self.width == 0
+        {
+            return Some(self);
+        }
+
+        let mut width = match resize.width {
+            ResizeParameter::Auto => 1,
+            ResizeParameter::Pixels(n) => n as usize,
+            ResizeParameter::Cells(n) => n as usize * cell_width,
+            ResizeParameter::WindowPercent(n) => n as usize * view_width / 100,
+        };
+
+        let mut height = match resize.height {
+            ResizeParameter::Auto => 1,
+            ResizeParameter::Pixels(n) => n as usize,
+            ResizeParameter::Cells(n) => n as usize * cell_height,
+            ResizeParameter::WindowPercent(n) => n as usize * view_height / 100,
+        };
+
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        // Compute "auto" dimensions.
+        if resize.width == ResizeParameter::Auto {
+            width = self.width * height / self.height;
+        }
+
+        if resize.height == ResizeParameter::Auto {
+            height = self.height * width / self.width;
+        }
+
+        // Limit size to MAX_GRAPHIC_DIMENSIONS.
+        width = cmp::min(width, MAX_GRAPHIC_DIMENSIONS[0]);
+        height = cmp::min(height, MAX_GRAPHIC_DIMENSIONS[1]);
+
+        log::trace!("Resize new graphic to width={}, height={}", width, height,);
+
+        // Create a new DynamicImage to resize the graphic.
+        let dynimage = match self.color_type {
+            ColorType::Rgb => {
+                let buffer =
+                    image::RgbImage::from_raw(self.width as u32, self.height as u32, self.pixels)?;
+                DynamicImage::ImageRgb8(buffer)
+            },
+
+            ColorType::Rgba => {
+                let buffer =
+                    image::RgbaImage::from_raw(self.width as u32, self.height as u32, self.pixels)?;
+                DynamicImage::ImageRgba8(buffer)
+            },
+        };
+
+        // Finally, use `resize` or `resize_exact` to make the new image.
+        let width = width as u32;
+        let height = height as u32;
+        let filter = image::imageops::FilterType::Triangle;
+
+        let new_image = if resize.preserve_aspect_ratio {
+            dynimage.resize(width, height, filter)
+        } else {
+            dynimage.resize_exact(width, height, filter)
+        };
+
+        Some(Self::from_dynamic_image(self.id, new_image))
     }
 }
 
@@ -483,6 +630,16 @@ pub fn insert_graphic<L: EventListener>(
         }
     }
 
+    let graphic = match graphic.resized(
+        cell_width,
+        cell_height,
+        cell_width * term.columns(),
+        cell_height * term.screen_lines(),
+    ) {
+        Some(graphic) => graphic,
+        None => return,
+    };
+
     if graphic.width > MAX_GRAPHIC_DIMENSIONS[0] || graphic.height > MAX_GRAPHIC_DIMENSIONS[1] {
         return;
     }
@@ -641,6 +798,7 @@ fn check_opaque_region() {
         color_type: ColorType::Rgb,
         pixels: vec![255; 10 * 10 * 3],
         is_opaque: true,
+        resize: None,
     };
 
     assert!(graphic.is_filled(1, 1, 3, 3));
@@ -663,6 +821,7 @@ fn check_opaque_region() {
         height: 10,
         color_type: ColorType::Rgba,
         is_opaque: false,
+        resize: None,
     };
 
     assert!(graphic.is_filled(0, 0, 3, 3));

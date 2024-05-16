@@ -28,6 +28,11 @@ vte = { git = "https://github.com/ayosec/vte-graphics.git", branch = "graphics",
 serde = { version = "1", features = ["derive", "rc"], optional = true }
 smallvec = { version = "1.13.1", features = ["serde"] }
 
+[dependencies.image]
+version = "0.25.1"
+default-features = false
+features = ["gif", "jpeg", "ico", "png", "pnm", "webp", "bmp"]
+
 [target.'cfg(unix)'.dependencies]
 rustix-openpty = "0.1.1"
 signal-hook = "0.3.10"
