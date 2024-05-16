@@ -89,3 +89,16 @@ wayland = [
     "winit/wayland-csd-adwaita-crossfont",
 ]
 nightly = []
+
+
+
+
+
+[package.metadata.deb]
+extended-description = "Alacritty terminal."
+revision = "1"
+assets = [
+  [ "../target/release/alacritty", "usr/bin/", "755" ],
+  [ "../target/terminfo/a/*", "etc/terminfo/a/", "644" ],
+  [ "../target/man/*", "usr/share/man/man1/", "644" ],
+]
