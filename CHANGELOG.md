@@ -10,10 +10,25 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 
 ## 0.14.0-dev
 
+### Packaging
+
+- Minimum Rust version has been bumped to 1.74.0
+
+### Added
+
+- Support relative path imports from config files
+- `alacritty migrate` support for TOML configuration changes
+- Support for Unicode 16 characters
+
 ### Changed
 
 - Pressing `Alt` with unicode input will now add `ESC` like for ASCII input
 - Decorations use opaque style and system window background on macOS
+- No longer source `~/.zshenv` on macOS
+- Moved config options `import`, `working_directory`, `live_config_reload`, and `ipc_socket`
+    to the new `general` section
+- Moved config option `shell` to `terminal.shell`
+- `ctrl+shift+u` binding to open links to `ctrl+shift+o` to avoid collisions with IMEs
 
 ### Fixed
 
@@ -21,6 +36,18 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - New window being treated as focused when it's not on Wayland
 - IME preview blending into text below it
 - Dynamic title disabled for new windows when initial one has title as CLI option
+- While terminal in mouse mode, mouse bindings that used the shift modifier and
+  had multiple actions only performed the first action
+- Leaking FDs when closing windows on Unix systems
+- Config emitting errors for nonexistent import paths
+- Kitty keyboard protocol reporting shifted key codes
+- Broken search with words broken across line boundary on the first character
+- Config import changes not being live reloaded
+- Cursor color requests with default cursor colors
+- Fullwidth semantic escape characters
+- Windows app icon now displays properly in old alt+tab on Windows
+- Alacritty not being properly activated with startup notify
+- Invalid URL highlights after terminal scrolling
 
 ## 0.13.2
 
@@ -312,7 +339,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - Terminal not exiting sometimes after closing all windows on macOS
 - CPU usage spikes due to mouse movements for unfocused windows on X11/Windows
 - First window on macOS not tabbed with system prefer tabs setting
-- Window being treaten as focused by default on Wayland
+- Window being treated as focused by default on Wayland
 
 ### Removed
 
@@ -336,7 +363,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - OSC 104 not clearing colors when second parameter is empty
 - Builtin font lines not contiguous when `font.offset` is used
 - `font.glyph_offset` is no longer applied on builtin font
-- Buili-in font arcs alignment
+- Built-in font arcs alignment
 - Repeated permission prompts on M1 macs
 - Colors being slightly off when using `colors.transparent_background_colors`
 
@@ -668,7 +695,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - Reflow of cursor during resize
 - Cursor color escape ignored when its color is set to inverted in the config
 - Fontconfig's `autohint` and `hinting` options being ignored
-- Ingoring of default FreeType properties
+- Ignoring of default FreeType properties
 - Alacritty crashing at startup when the configured font does not exist
 - Font size rounding error
 - Opening URLs while search is active
@@ -876,7 +903,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - Block URL highlight while a selection is active
 - Bindings for Alt + F1-F12
 - Discard scrolling region escape with bottom above top
-- Opacity always applying to cells with their background color matching the teriminal background
+- Opacity always applying to cells with their background color matching the terminal background
 - Allow semicolons when setting titles using an OSC
 - Background always opaque on X11
 - Skipping redraws on PTY update
@@ -946,7 +973,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 
 ### Fixed
 
-- Double-width characters in URLs only being highlit on the left half
+- Double-width characters in URLs only being highlighted on the left half
 - PTY size not getting updated when message bar is shown
 - Text Cursor disappearing
 - Incorrect positioning of zero-width characters over double-width characters

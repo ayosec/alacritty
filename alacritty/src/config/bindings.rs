@@ -291,7 +291,7 @@ impl Display for Action {
             Action::ViMotion(motion) => motion.fmt(f),
             Action::Vi(action) => action.fmt(f),
             Action::Mouse(action) => action.fmt(f),
-            _ => write!(f, "{:?}", self),
+            _ => write!(f, "{self:?}"),
         }
     }
 }
@@ -1028,8 +1028,7 @@ impl<'a> Deserialize<'a> for RawBinding {
                                     },
                                     Err(_) => {
                                         return Err(<V::Error as Error>::custom(format!(
-                                            "Invalid key binding, scancode is too big: {}",
-                                            scancode
+                                            "Invalid key binding, scancode is too big: {scancode}"
                                         )));
                                     },
                                 },
@@ -1084,8 +1083,7 @@ impl<'a> Deserialize<'a> for RawBinding {
                                             _ => return Err(err),
                                         };
                                         return Err(V::Error::custom(format!(
-                                            "unknown keyboard action `{}`",
-                                            value
+                                            "unknown keyboard action `{value}`"
                                         )));
                                     },
                                 }
@@ -1126,8 +1124,7 @@ impl<'a> Deserialize<'a> for RawBinding {
                     (Some(action @ Action::Mouse(_)), None, None) => {
                         if mouse.is_none() {
                             return Err(V::Error::custom(format!(
-                                "action `{}` is only available for mouse bindings",
-                                action,
+                                "action `{action}` is only available for mouse bindings",
                             )));
                         }
                         action
