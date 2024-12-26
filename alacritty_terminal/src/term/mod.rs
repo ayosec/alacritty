@@ -209,7 +209,7 @@ impl<'a> TermDamageIterator<'a> {
     }
 }
 
-impl<'a> Iterator for TermDamageIterator<'a> {
+impl Iterator for TermDamageIterator<'_> {
     type Item = LineDamageBounds;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -956,6 +956,11 @@ impl<T> Term<T> {
     #[inline]
     pub fn semantic_escape_chars(&self) -> &str {
         &self.config.semantic_escape_chars
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_semantic_escape_chars(&mut self, semantic_escape_chars: &str) {
+        self.config.semantic_escape_chars = semantic_escape_chars.into();
     }
 
     /// Active terminal cursor style.

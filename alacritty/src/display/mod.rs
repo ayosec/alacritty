@@ -297,12 +297,12 @@ impl TermDimensions for SizeInfo {
 
     #[inline]
     fn cell_height(&self) -> f32 {
-        self.cell_height()
+        self.cell_height
     }
 
     #[inline]
     fn cell_width(&self) -> f32 {
-        self.cell_width()
+        self.cell_width
     }
 }
 
@@ -352,9 +352,13 @@ pub struct Display {
 
     /// Hint highlighted by the mouse.
     pub highlighted_hint: Option<HintMatch>,
+    /// Frames since hint highlight was created.
+    highlighted_hint_age: usize,
 
     /// Hint highlighted by the vi mode cursor.
     pub vi_highlighted_hint: Option<HintMatch>,
+    /// Frames since hint highlight was created.
+    vi_highlighted_hint_age: usize,
 
     pub raw_window_handle: RawWindowHandle,
 
@@ -490,6 +494,10 @@ impl Display {
 
         window.set_visible(true);
 
+        // Always focus new windows, even if no Alacritty window is currently focused.
+        #[cfg(target_os = "macos")]
+        window.focus_window();
+
         #[allow(clippy::single_match)]
         #[cfg(not(windows))]
         if !_tabbed {
@@ -526,6 +534,8 @@ impl Display {
             font_size,
             window,
             pending_renderer_update: Default::default(),
+            vi_highlighted_hint_age: Default::default(),
+            highlighted_hint_age: Default::default(),
             vi_highlighted_hint: Default::default(),
             highlighted_hint: Default::default(),
             hint_mouse_point: Default::default(),
@@ -771,7 +781,7 @@ impl Display {
         drop(terminal);
 
         // Invalidate highlighted hints if grid has changed.
-        self.validate_hints(display_offset);
+        self.validate_hint_highlights(display_offset);
 
         // Add damage from alacritty's UI elements overlapping terminal.
 
@@ -899,7 +909,9 @@ impl Display {
                 if self.ime.preedit().is_none() {
                     let fg = config.colors.footer_bar_foreground();
                     let shape = CursorShape::Underline;
-                    let cursor = RenderableCursor::new(Point::new(line, column), shape, fg, false);
+                    let cursor_width = NonZeroU32::new(1).unwrap();
+                    let cursor =
+                        RenderableCursor::new(Point::new(line, column), shape, fg, cursor_width);
                     rects.extend(cursor.rects(&size_info, config.cursor.thickness()));
                 }
 
@@ -907,8 +919,11 @@ impl Display {
             },
             None => {
                 let num_lines = self.size_info.screen_lines();
-                term::point_to_viewport(display_offset, cursor_point)
-                    .filter(|point| point.line < num_lines)
+                match vi_cursor_viewport_point {
+                    None => term::point_to_viewport(display_offset, cursor_point)
+                        .filter(|point| point.line < num_lines),
+                    point => point,
+                }
             },
         };
 
@@ -1037,9 +1052,10 @@ impl Display {
         };
         let mut dirty = vi_highlighted_hint != self.vi_highlighted_hint;
         self.vi_highlighted_hint = vi_highlighted_hint;
+        self.vi_highlighted_hint_age = 0;
 
         // Force full redraw if the vi mode highlight was cleared.
-        if dirty && self.vi_highlighted_hint.is_none() {
+        if dirty {
             self.damage_tracker.frame().mark_fully_damaged();
         }
 
@@ -1075,9 +1091,10 @@ impl Display {
         let mouse_highlight_dirty = self.highlighted_hint != highlighted_hint;
         dirty |= mouse_highlight_dirty;
         self.highlighted_hint = highlighted_hint;
+        self.highlighted_hint_age = 0;
 
-        // Force full redraw if the mouse cursor highlight was cleared.
-        if mouse_highlight_dirty && self.highlighted_hint.is_none() {
+        // Force full redraw if the mouse cursor highlight was changed.
+        if mouse_highlight_dirty {
             self.damage_tracker.frame().mark_fully_damaged();
         }
 
@@ -1106,8 +1123,8 @@ impl Display {
 
         // Get the visible preedit.
         let visible_text: String = match (preedit.cursor_byte_offset, preedit.cursor_end_offset) {
-            (Some(byte_offset), Some(end_offset)) if end_offset > num_cols => StrShortener::new(
-                &preedit.text[byte_offset..],
+            (Some(byte_offset), Some(end_offset)) if end_offset.0 > num_cols => StrShortener::new(
+                &preedit.text[byte_offset.0..],
                 num_cols,
                 ShortenDirection::Right,
                 Some(SHORTENER),
@@ -1150,19 +1167,21 @@ impl Display {
         rects.extend(underline.rects(Flags::UNDERLINE, &metrics, &self.size_info));
 
         let ime_popup_point = match preedit.cursor_end_offset {
-            Some(cursor_end_offset) if cursor_end_offset != 0 => {
-                let is_wide = preedit.text[preedit.cursor_byte_offset.unwrap_or_default()..]
-                    .chars()
-                    .next()
-                    .map(|ch| ch.width() == Some(2))
-                    .unwrap_or_default();
+            Some(cursor_end_offset) => {
+                // Use hollow block when multiple characters are changed at once.
+                let (shape, width) = if let Some(width) =
+                    NonZeroU32::new((cursor_end_offset.0 - cursor_end_offset.1) as u32)
+                {
+                    (CursorShape::HollowBlock, width)
+                } else {
+                    (CursorShape::Beam, NonZeroU32::new(1).unwrap())
+                };
 
                 let cursor_column = Column(
-                    (end.column.0 as isize - cursor_end_offset as isize + 1).max(0) as usize,
+                    (end.column.0 as isize - cursor_end_offset.0 as isize + 1).max(0) as usize,
                 );
                 let cursor_point = Point::new(point.line, cursor_column);
-                let cursor =
-                    RenderableCursor::new(cursor_point, CursorShape::HollowBlock, fg, is_wide);
+                let cursor = RenderableCursor::new(cursor_point, shape, fg, width);
                 rects.extend(cursor.rects(&self.size_info, config.cursor.thickness()));
                 cursor_point
             },
@@ -1349,15 +1368,23 @@ impl Display {
     }
 
     /// Check whether a hint highlight needs to be cleared.
-    fn validate_hints(&mut self, display_offset: usize) {
+    fn validate_hint_highlights(&mut self, display_offset: usize) {
         let frame = self.damage_tracker.frame();
-        for (hint, reset_mouse) in
-            [(&mut self.highlighted_hint, true), (&mut self.vi_highlighted_hint, false)]
-        {
+        let hints = [
+            (&mut self.highlighted_hint, &mut self.highlighted_hint_age, true),
+            (&mut self.vi_highlighted_hint, &mut self.vi_highlighted_hint_age, false),
+        ];
+        for (hint, hint_age, reset_mouse) in hints {
             let (start, end) = match hint {
                 Some(hint) => (*hint.bounds().start(), *hint.bounds().end()),
-                None => return,
+                None => continue,
             };
+
+            // Ignore hints that were created this frame.
+            *hint_age += 1;
+            if *hint_age == 1 {
+                continue;
+            }
 
             // Convert hint bounds to viewport coordinates.
             let start = term::point_to_viewport(display_offset, start).unwrap_or_default();
@@ -1461,20 +1488,22 @@ pub struct Preedit {
     /// Byte offset for cursor start into the preedit text.
     ///
     /// `None` means that the cursor is invisible.
-    cursor_byte_offset: Option<usize>,
+    cursor_byte_offset: Option<(usize, usize)>,
 
-    /// The cursor offset from the end of the preedit in char width.
-    cursor_end_offset: Option<usize>,
+    /// The cursor offset from the end of the start of the preedit in char width.
+    cursor_end_offset: Option<(usize, usize)>,
 }
 
 impl Preedit {
-    pub fn new(text: String, cursor_byte_offset: Option<usize>) -> Self {
+    pub fn new(text: String, cursor_byte_offset: Option<(usize, usize)>) -> Self {
         let cursor_end_offset = if let Some(byte_offset) = cursor_byte_offset {
             // Convert byte offset into char offset.
-            let cursor_end_offset =
-                text[byte_offset..].chars().fold(0, |acc, ch| acc + ch.width().unwrap_or(1));
+            let start_to_end_offset =
+                text[byte_offset.0..].chars().fold(0, |acc, ch| acc + ch.width().unwrap_or(1));
+            let end_to_end_offset =
+                text[byte_offset.1..].chars().fold(0, |acc, ch| acc + ch.width().unwrap_or(1));
 
-            Some(cursor_end_offset)
+            Some((start_to_end_offset, end_to_end_offset))
         } else {
             None
         };

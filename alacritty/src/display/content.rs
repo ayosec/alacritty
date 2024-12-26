@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::{cmp, mem};
 
@@ -137,8 +138,13 @@ impl<'a> RenderableContent<'a> {
             text_color = self.config.colors.primary.background;
         }
 
+        let width = if cell.flags.contains(Flags::WIDE_CHAR) {
+            NonZeroU32::new(2).unwrap()
+        } else {
+            NonZeroU32::new(1).unwrap()
+        };
         RenderableCursor {
-            is_wide: cell.flags.contains(Flags::WIDE_CHAR),
+            width,
             shape: self.cursor_shape,
             point: self.cursor_point,
             cursor_color,
@@ -147,7 +153,7 @@ impl<'a> RenderableContent<'a> {
     }
 }
 
-impl<'a> Iterator for RenderableContent<'a> {
+impl Iterator for RenderableContent<'_> {
     type Item = RenderableCell;
 
     /// Gets the next renderable cell.
@@ -425,7 +431,7 @@ pub struct RenderableCursor {
     shape: CursorShape,
     cursor_color: Rgb,
     text_color: Rgb,
-    is_wide: bool,
+    width: NonZeroU32,
     point: Point<usize>,
 }
 
@@ -434,15 +440,20 @@ impl RenderableCursor {
         let shape = CursorShape::Hidden;
         let cursor_color = Rgb::default();
         let text_color = Rgb::default();
-        let is_wide = false;
+        let width = NonZeroU32::new(1).unwrap();
         let point = Point::default();
-        Self { shape, cursor_color, text_color, is_wide, point }
+        Self { shape, cursor_color, text_color, width, point }
     }
 }
 
 impl RenderableCursor {
-    pub fn new(point: Point<usize>, shape: CursorShape, cursor_color: Rgb, is_wide: bool) -> Self {
-        Self { shape, cursor_color, text_color: cursor_color, is_wide, point }
+    pub fn new(
+        point: Point<usize>,
+        shape: CursorShape,
+        cursor_color: Rgb,
+        width: NonZeroU32,
+    ) -> Self {
+        Self { shape, cursor_color, text_color: cursor_color, width, point }
     }
 
     pub fn color(&self) -> Rgb {
@@ -453,8 +464,8 @@ impl RenderableCursor {
         self.shape
     }
 
-    pub fn is_wide(&self) -> bool {
-        self.is_wide
+    pub fn width(&self) -> NonZeroU32 {
+        self.width
     }
 
     pub fn point(&self) -> Point<usize> {
@@ -471,7 +482,7 @@ struct Hint<'a> {
     labels: &'a Vec<Vec<char>>,
 }
 
-impl<'a> Hint<'a> {
+impl Hint<'_> {
     /// Advance the hint iterator.
     ///
     /// If the point is within a hint, the keyboard shortcut character that should be displayed at
@@ -561,7 +572,7 @@ impl<'a> HintMatches<'a> {
     }
 }
 
-impl<'a> Deref for HintMatches<'a> {
+impl Deref for HintMatches<'_> {
     type Target = [Match];
 
     fn deref(&self) -> &Self::Target {
