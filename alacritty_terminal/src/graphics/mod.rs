@@ -194,7 +194,8 @@ pub enum ColorType {
 }
 
 /// Unit to specify a dimension to resize the graphic.
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Eq, PartialEq, Clone, Copy, Debug)]
 pub enum ResizeParameter {
     /// Dimension is computed from the original graphic dimensions.
     Auto,
@@ -210,7 +211,8 @@ pub enum ResizeParameter {
 }
 
 /// Dimensions to resize a graphic.
-#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Eq, PartialEq, Clone, Copy, Debug)]
 pub struct ResizeCommand {
     pub width: ResizeParameter,
 
