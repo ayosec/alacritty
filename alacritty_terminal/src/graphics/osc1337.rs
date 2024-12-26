@@ -110,7 +110,8 @@ fn resize_param(params: &HashMap<&str, &str>) -> Option<ResizeCommand> {
 
         // Split the value after the first non-digit byte.
         // If there is no unit, parse as number of cells.
-        let first_nondigit = value.as_bytes().iter().position(|b| !(b'0'..=b'9').contains(&b));
+        let first_nondigit = value.as_bytes().iter().position(|b| !b.is_ascii_digit());
+
         let (number, unit) = match first_nondigit {
             Some(position) => value.split_at(position),
             None => return Some(ResizeParameter::Cells(str::parse(value).ok()?)),

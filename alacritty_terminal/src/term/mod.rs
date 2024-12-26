@@ -2349,7 +2349,7 @@ impl<T: EventListener> Handler for Term<T> {
     }
 
     fn osc_unhandled(&mut self, params: &[&[u8]], _terminator: &str) {
-        match params.get(0) {
+        match params.first() {
             // Bookmarks.
             Some(&b"MARK") => bookmarks::osc_execute(self, params),
 
