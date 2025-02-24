@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Notable changes to the `alacritty_terminal` crate are documented in its
 [CHANGELOG](./alacritty_terminal/CHANGELOG.md).
 
+## 0.15.1
+
+### Changed
+
+- Error out when socket fails to create with `--daemon`
+- Default URL hints now stop before backslashes
+
+### Fixed
+
+- Modifiers being out of sync for fast/synthetic input on X11
+- Child process creation failing while inside a deleted directory
+- Shifted key reported without a shift when using kitty keyboard protocol
+
 ## 0.15.0
 
 ### Added
