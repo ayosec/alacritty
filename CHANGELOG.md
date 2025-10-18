@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Notable changes to the `alacritty_terminal` crate are documented in its
 [CHANGELOG](./alacritty_terminal/CHANGELOG.md).
 
-## 0.16.0-rc1
+## 0.16.0
 
 ### Packaging
 
@@ -21,6 +21,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - Multi-sequence touch zoom sequences
 - Vi action `Y` keybind, yank to the end of line
 - Add `/etc/alacritty/alacritty.toml` fallback for system wide configuration
+- Unicode 17 support
 
 ### Changed
 
@@ -39,6 +40,7 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 - Origin mode (DECOM) not moving cursor to the origin point
 - Unresponsiveness when spamming the bell character with a bell command enabled
 - `window.startup_mode` applied to existing window when opening a new tab on macOS
+- Slowdowns over time on macOS 26
 
 ## 0.15.1
 
