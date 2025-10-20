@@ -8,11 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Notable changes to the `alacritty_terminal` crate are documented in its
 [CHANGELOG](./alacritty_terminal/CHANGELOG.md).
 
-## 0.17.0-dev
+## 0.16.1
 
-### Changed
+### Fixed
 
-- Don't highlight hints on hover when the mouse cursor is hidden
+- Crashes on GPUs with partial robustness support
 
 ## 0.16.0
 
