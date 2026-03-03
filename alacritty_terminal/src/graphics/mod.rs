@@ -1,6 +1,8 @@
 //! This module implements the logic to manage graphic items included in a
 //! `Grid` instance.
 
+pub mod kitty;
+pub mod kitty_parser;
 pub mod sixel;
 
 use std::collections::HashSet;
@@ -314,6 +316,15 @@ pub struct Graphics {
 
     /// Current Sixel parser.
     pub sixel_parser: Option<Box<sixel::Parser>>,
+
+    /// Buffer for accumulating kitty graphics APC sequences.
+    pub kitty_apc_buffer: Option<kitty_parser::KittyApcBuffer>,
+
+    /// Last parsed kitty graphics command (for dispatch and testing).
+    pub last_kitty_command: Option<kitty_parser::KittyCommand>,
+
+    /// Kitty graphics protocol state (image storage, chunked transfers, etc.).
+    pub kitty_state: kitty::KittyState,
 }
 
 impl Graphics {

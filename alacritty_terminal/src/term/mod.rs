@@ -736,6 +736,11 @@ impl<T> Term<T> {
         &self.mode
     }
 
+    /// Get a reference to the event proxy for sending events.
+    pub fn event_proxy(&self) -> &T {
+        &self.event_proxy
+    }
+
     /// Swap primary and alternate screen buffer.
     pub fn swap_alt(&mut self) {
         if !self.mode.contains(TermMode::ALT_SCREEN) {
@@ -2373,6 +2378,42 @@ impl<T: EventListener> Handler for Term<T> {
             debug!("[unhandled dcs_unhook]");
         }
     }
+
+    /// Start of an APC (Application Program Command) sequence.
+    fn apc_start(&mut self) {
+        let buf = self
+            .graphics
+            .kitty_apc_buffer
+            .get_or_insert_with(crate::graphics::kitty_parser::KittyApcBuffer::new);
+        buf.start();
+    }
+
+    /// Byte of an APC string.
+    fn apc_put(&mut self, byte: u8) {
+        if let Some(buf) = &mut self.graphics.kitty_apc_buffer {
+            buf.put(byte);
+        }
+    }
+
+    /// End of an APC string.
+    fn apc_end(&mut self) {
+        if let Some(buf) = &mut self.graphics.kitty_apc_buffer {
+            if let Some(cmd) = buf.finish() {
+                debug!(
+                    "[kitty] command: action={:?}, id={}, fmt={:?}, medium={:?}, \
+                     more={}, payload_len={}",
+                    cmd.action,
+                    cmd.image_id,
+                    cmd.format,
+                    cmd.medium,
+                    cmd.more_chunks,
+                    cmd.payload.len(),
+                );
+                self.graphics.last_kitty_command = Some(cmd.clone());
+                crate::graphics::kitty::dispatch_command(self, cmd);
+            }
+        }
+    }
 }
 
 /// The state of the [`Mode`] and [`PrivateMode`].
@@ -2529,11 +2570,30 @@ pub mod test {
     pub struct TermSize {
         pub columns: usize,
         pub screen_lines: usize,
+        /// Cell width in pixels (used by sixel/graphics). Defaults to 8.
+        #[cfg_attr(feature = "serde", serde(default = "TermSize::default_cell_width"))]
+        pub cell_width: f32,
+        /// Cell height in pixels (used by sixel/graphics). Defaults to 16.
+        #[cfg_attr(feature = "serde", serde(default = "TermSize::default_cell_height"))]
+        pub cell_height: f32,
     }
 
     impl TermSize {
         pub fn new(columns: usize, screen_lines: usize) -> Self {
-            Self { columns, screen_lines }
+            Self {
+                columns,
+                screen_lines,
+                cell_width: Self::default_cell_width(),
+                cell_height: Self::default_cell_height(),
+            }
+        }
+
+        fn default_cell_width() -> f32 {
+            8.0
+        }
+
+        fn default_cell_height() -> f32 {
+            16.0
         }
     }
 
@@ -2548,6 +2608,14 @@ pub mod test {
 
         fn columns(&self) -> usize {
             self.columns
+        }
+
+        fn cell_width(&self) -> f32 {
+            self.cell_width
+        }
+
+        fn cell_height(&self) -> f32 {
+            self.cell_height
         }
     }
 
@@ -3402,5 +3470,423 @@ mod tests {
         assert_eq!(version_number("0.1.2-dev"), 1_02);
         assert_eq!(version_number("1.2.3-dev"), 1_02_03);
         assert_eq!(version_number("999.99.99"), 9_99_99_99);
+    }
+
+    // ── Kitty graphics APC integration tests ──────────────────────────
+
+    /// Feed raw bytes through the full VTE pipeline (Processor → Parser → Term).
+    fn feed_bytes(term: &mut Term<VoidListener>, bytes: &[u8]) {
+        let mut processor: crate::vte::ansi::Processor = crate::vte::ansi::Processor::new();
+        processor.advance(term, bytes);
+    }
+
+    /// Helper to get the last parsed kitty command from a term.
+    fn take_kitty_cmd(
+        term: &mut Term<VoidListener>,
+    ) -> Option<crate::graphics::kitty_parser::KittyCommand> {
+        term.graphics.last_kitty_command.take()
+    }
+
+    #[test]
+    fn kitty_apc_transmit_and_display_png() {
+        use crate::graphics::kitty_parser::{Action, Format, Medium};
+
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // ESC _ G a=T,f=100,i=1;AAAA ESC \
+        feed_bytes(&mut term, b"\x1b_Ga=T,f=100,i=1;AAAA\x1b\\");
+
+        let cmd = take_kitty_cmd(&mut term).expect("should have parsed a kitty command");
+        assert_eq!(cmd.action, Action::TransmitAndDisplay);
+        assert_eq!(cmd.format, Format::Png);
+        assert_eq!(cmd.medium, Medium::Direct);
+        assert_eq!(cmd.image_id, 1);
+        assert_eq!(cmd.payload, b"AAAA");
+        assert!(!cmd.more_chunks);
+    }
+
+    #[test]
+    fn kitty_apc_query() {
+        use crate::graphics::kitty_parser::Action;
+
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        feed_bytes(&mut term, b"\x1b_Ga=q,i=42,f=100;\x1b\\");
+
+        let cmd = take_kitty_cmd(&mut term).expect("should have parsed a query");
+        assert_eq!(cmd.action, Action::Query);
+        assert_eq!(cmd.image_id, 42);
+    }
+
+    #[test]
+    fn kitty_apc_delete_all() {
+        use crate::graphics::kitty_parser::{Action, DeleteTarget};
+
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        feed_bytes(&mut term, b"\x1b_Ga=d,d=a\x1b\\");
+
+        let cmd = take_kitty_cmd(&mut term).expect("should have parsed a delete");
+        assert_eq!(cmd.action, Action::Delete);
+        assert_eq!(cmd.delete, Some(DeleteTarget::All));
+    }
+
+    #[test]
+    fn kitty_apc_chunked_sequence() {
+        use crate::graphics::kitty_parser::Action;
+
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // First chunk: m=1 (more coming).
+        feed_bytes(&mut term, b"\x1b_Ga=T,f=100,m=1;chunk1\x1b\\");
+        let cmd1 = take_kitty_cmd(&mut term).expect("should parse first chunk");
+        assert_eq!(cmd1.action, Action::TransmitAndDisplay);
+        assert!(cmd1.more_chunks);
+        assert_eq!(cmd1.payload, b"chunk1");
+
+        // Last chunk: m=0.
+        feed_bytes(&mut term, b"\x1b_Gm=0;chunk2\x1b\\");
+        let cmd2 = take_kitty_cmd(&mut term).expect("should parse last chunk");
+        assert!(!cmd2.more_chunks);
+        assert_eq!(cmd2.payload, b"chunk2");
+    }
+
+    #[test]
+    fn kitty_apc_display_with_placement() {
+        use crate::graphics::kitty_parser::Action;
+
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        feed_bytes(&mut term, b"\x1b_Ga=p,i=5,p=1,c=10,r=5,z=-1,C=1\x1b\\");
+
+        let cmd = take_kitty_cmd(&mut term).expect("should parse display command");
+        assert_eq!(cmd.action, Action::Display);
+        assert_eq!(cmd.image_id, 5);
+        assert_eq!(cmd.placement_id, 1);
+        assert_eq!(cmd.columns, 10);
+        assert_eq!(cmd.rows, 5);
+        assert_eq!(cmd.z_index, -1);
+        assert_eq!(cmd.cursor_movement, 1);
+    }
+
+    #[test]
+    fn kitty_apc_non_kitty_ignored() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // APC that doesn't start with 'G' — not kitty graphics.
+        feed_bytes(&mut term, b"\x1b_Xsomething\x1b\\");
+
+        assert!(take_kitty_cmd(&mut term).is_none());
+    }
+
+    #[test]
+    fn kitty_apc_interleaved_with_text() {
+        use crate::graphics::kitty_parser::Action;
+
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // Text, then kitty command, then more text.
+        feed_bytes(&mut term, b"Hello\x1b_Ga=q,i=1\x1b\\World");
+
+        let cmd = take_kitty_cmd(&mut term).expect("should parse command amid text");
+        assert_eq!(cmd.action, Action::Query);
+        assert_eq!(cmd.image_id, 1);
+    }
+
+    // ── Phase 2: End-to-end integration tests ─────────────────────────
+    //
+    // These feed raw APC bytes through the full VTE → Parser → Term →
+    // dispatch_command pipeline and verify the resulting state (images
+    // stored, deletions applied, animation states created, etc.).
+
+    /// Helper: base64-encode a WxH solid-color RGBA image.
+    fn make_rgba_b64(width: usize, height: usize, r: u8, g: u8, b: u8, a: u8) -> String {
+        use base64::Engine;
+        let pixels: Vec<u8> = [r, g, b, a].repeat(width * height);
+        base64::engine::general_purpose::STANDARD.encode(&pixels)
+    }
+
+    #[test]
+    fn kitty_e2e_transmit_stores_image() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        let b64 = make_rgba_b64(2, 2, 255, 0, 0, 255);
+        let apc = format!("\x1b_Ga=t,f=32,s=2,v=2,i=1;{b64}\x1b\\");
+        feed_bytes(&mut term, apc.as_bytes());
+
+        let img = term.graphics.kitty_state.get_image(1)
+            .expect("image 1 should be stored after transmit");
+        assert_eq!(img.data.width, 2);
+        assert_eq!(img.data.height, 2);
+        assert_eq!(img.data.pixels.len(), 16);
+        assert_eq!(img.total_bytes, 16);
+    }
+
+    #[test]
+    fn kitty_e2e_transmit_and_display_stores_image() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        let b64 = make_rgba_b64(2, 2, 0, 255, 0, 255);
+        let apc = format!("\x1b_Ga=T,f=32,s=2,v=2,i=5;{b64}\x1b\\");
+        feed_bytes(&mut term, apc.as_bytes());
+
+        let img = term.graphics.kitty_state.get_image(5)
+            .expect("image 5 should be stored after transmit+display");
+        assert_eq!(img.data.width, 2);
+        assert_eq!(img.data.height, 2);
+    }
+
+    #[test]
+    fn kitty_e2e_delete_by_id_removes_image() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // Transmit two images.
+        let b64 = make_rgba_b64(1, 1, 255, 0, 0, 255);
+        feed_bytes(&mut term, format!("\x1b_Ga=t,f=32,s=1,v=1,i=10;{b64}\x1b\\").as_bytes());
+        feed_bytes(&mut term, format!("\x1b_Ga=t,f=32,s=1,v=1,i=20;{b64}\x1b\\").as_bytes());
+        assert!(term.graphics.kitty_state.get_image(10).is_some());
+        assert!(term.graphics.kitty_state.get_image(20).is_some());
+
+        // Delete image 10 by ID.
+        feed_bytes(&mut term, b"\x1b_Ga=d,d=i,i=10\x1b\\");
+
+        assert!(term.graphics.kitty_state.get_image(10).is_none(), "image 10 should be deleted");
+        assert!(term.graphics.kitty_state.get_image(20).is_some(), "image 20 should survive");
+    }
+
+    #[test]
+    fn kitty_e2e_delete_all_clears_storage() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        let b64 = make_rgba_b64(1, 1, 0, 0, 255, 255);
+        for id in 1..=5u32 {
+            let apc = format!("\x1b_Ga=t,f=32,s=1,v=1,i={id};{b64}\x1b\\");
+            feed_bytes(&mut term, apc.as_bytes());
+        }
+        assert_eq!(term.graphics.kitty_state.images.len(), 5);
+
+        feed_bytes(&mut term, b"\x1b_Ga=d,d=a\x1b\\");
+
+        assert!(term.graphics.kitty_state.images.is_empty(), "all images should be deleted");
+        assert_eq!(term.graphics.kitty_state.used_memory, 0);
+    }
+
+    #[test]
+    fn kitty_e2e_chunked_transfer_merges_and_stores() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // 2x2 RGBA = 16 bytes. Split the base64 into two chunks.
+        let b64 = make_rgba_b64(2, 2, 128, 64, 32, 255);
+        let mid = b64.len() / 2;
+        let chunk1 = &b64[..mid];
+        let chunk2 = &b64[mid..];
+
+        // First chunk (m=1 = more coming).
+        let apc1 = format!("\x1b_Ga=T,f=32,s=2,v=2,i=99,m=1;{chunk1}\x1b\\");
+        feed_bytes(&mut term, apc1.as_bytes());
+        assert!(term.graphics.kitty_state.get_image(99).is_none(),
+            "image should NOT be stored mid-transfer");
+        assert!(term.graphics.kitty_state.loading.is_some());
+
+        // Final chunk (m=0).
+        let apc2 = format!("\x1b_Gm=0;{chunk2}\x1b\\");
+        feed_bytes(&mut term, apc2.as_bytes());
+
+        let img = term.graphics.kitty_state.get_image(99)
+            .expect("image should be stored after final chunk");
+        assert_eq!(img.data.width, 2);
+        assert_eq!(img.data.height, 2);
+        assert_eq!(img.data.pixels.len(), 16);
+        assert!(term.graphics.kitty_state.loading.is_none());
+    }
+
+    #[test]
+    fn kitty_e2e_file_medium_reads_and_stores() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // Write raw RGBA pixel data to a temp file.
+        let pixels: Vec<u8> = vec![
+            255, 128, 64, 255, 0, 0, 0, 255,
+            64, 128, 255, 255, 255, 255, 255, 255,
+        ];
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("kitty_e2e_file_{}.rgba", std::process::id()));
+        std::fs::write(&path, &pixels).expect("write temp file");
+
+        // Base64-encode the file path for the payload.
+        use base64::Engine;
+        let path_b64 = base64::engine::general_purpose::STANDARD
+            .encode(path.to_str().unwrap().as_bytes());
+
+        let apc = format!("\x1b_Ga=t,t=f,f=32,s=2,v=2,i=50;{path_b64}\x1b\\");
+        feed_bytes(&mut term, apc.as_bytes());
+
+        let img = term.graphics.kitty_state.get_image(50)
+            .expect("image should be stored from file medium");
+        assert_eq!(img.data.width, 2);
+        assert_eq!(img.data.height, 2);
+        assert_eq!(img.data.pixels, pixels);
+
+        // Clean up.
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn kitty_e2e_image_number_mapping() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // Transmit with both image_id (i=) and image_number (I=).
+        let b64 = make_rgba_b64(1, 1, 255, 255, 0, 255);
+        let apc = format!("\x1b_Ga=t,f=32,s=1,v=1,i=7,I=100;{b64}\x1b\\");
+        feed_bytes(&mut term, apc.as_bytes());
+
+        assert!(term.graphics.kitty_state.get_image(7).is_some());
+        assert_eq!(term.graphics.kitty_state.resolve_number(100), Some(7));
+
+        // Display by number (a=p with I=100).
+        feed_bytes(&mut term, b"\x1b_Ga=p,I=100\x1b\\");
+        assert!(term.graphics.kitty_state.get_image(7).is_some());
+    }
+
+    #[test]
+    fn kitty_e2e_delete_by_number() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        let b64 = make_rgba_b64(1, 1, 0, 0, 0, 255);
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=t,f=32,s=1,v=1,i=3,I=200;{b64}\x1b\\").as_bytes());
+        assert!(term.graphics.kitty_state.get_image(3).is_some());
+
+        // Delete by image number.
+        feed_bytes(&mut term, b"\x1b_Ga=d,d=n,I=200\x1b\\");
+        assert!(term.graphics.kitty_state.get_image(3).is_none(),
+            "image should be deleted via number mapping");
+        assert_eq!(term.graphics.kitty_state.resolve_number(200), None);
+    }
+
+    #[test]
+    fn kitty_e2e_replace_image_updates_storage() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // Store a 1x1 image.
+        let b64_small = make_rgba_b64(1, 1, 255, 0, 0, 255);
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=t,f=32,s=1,v=1,i=8;{b64_small}\x1b\\").as_bytes());
+        assert_eq!(term.graphics.kitty_state.get_image(8).unwrap().data.pixels.len(), 4);
+
+        // Replace with a 2x2 image using the same ID.
+        let b64_big = make_rgba_b64(2, 2, 0, 255, 0, 255);
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=t,f=32,s=2,v=2,i=8;{b64_big}\x1b\\").as_bytes());
+        let img = term.graphics.kitty_state.get_image(8).unwrap();
+        assert_eq!(img.data.width, 2);
+        assert_eq!(img.data.height, 2);
+        assert_eq!(img.data.pixels.len(), 16);
+    }
+
+    #[test]
+    fn kitty_e2e_query_does_not_store() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        let b64 = make_rgba_b64(1, 1, 255, 0, 0, 255);
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=q,f=32,i=42;{b64}\x1b\\").as_bytes());
+
+        // Query should validate but NOT store the image.
+        assert!(term.graphics.kitty_state.get_image(42).is_none(),
+            "query should not store images");
+        assert!(term.graphics.kitty_state.images.is_empty());
+    }
+
+    #[test]
+    fn kitty_e2e_animation_frame_creates_state() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // Transmit a base image.
+        let b64 = make_rgba_b64(2, 2, 255, 0, 0, 255);
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=T,f=32,s=2,v=2,i=30;{b64}\x1b\\").as_bytes());
+        assert!(term.graphics.kitty_state.get_image(30).is_some());
+        assert!(term.graphics.kitty_state.get_animation(30).is_none(),
+            "no animation state before first frame");
+
+        // Send an animation frame (a=f) with 100ms gap.
+        let frame_b64 = make_rgba_b64(2, 2, 0, 255, 0, 255);
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=f,i=30,f=32,s=2,v=2,z=100;{frame_b64}\x1b\\").as_bytes());
+
+        assert!(term.graphics.kitty_state.get_animation(30).is_some(),
+            "animation state should exist after frame transmit");
+        let anim = term.graphics.kitty_state.get_animation(30).unwrap();
+        assert!(anim.frames.len() >= 2,
+            "should have at least 2 frames (original + new)");
+    }
+
+    #[test]
+    fn kitty_e2e_delete_clears_animation_state() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // Transmit image + animation frame.
+        let b64 = make_rgba_b64(1, 1, 255, 0, 0, 255);
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=T,f=32,s=1,v=1,i=40;{b64}\x1b\\").as_bytes());
+        let frame_b64 = make_rgba_b64(1, 1, 0, 0, 255, 255);
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=f,i=40,f=32,s=1,v=1;{frame_b64}\x1b\\").as_bytes());
+        assert!(term.graphics.kitty_state.get_animation(40).is_some());
+
+        // Delete by ID should also clear animation.
+        feed_bytes(&mut term, b"\x1b_Ga=d,d=i,i=40\x1b\\");
+        assert!(term.graphics.kitty_state.get_image(40).is_none());
+        assert!(term.graphics.kitty_state.get_animation(40).is_none(),
+            "animation state should be cleared on delete");
+    }
+
+    #[test]
+    fn kitty_e2e_multiple_images_memory_tracking() {
+        let size = TermSize::new(80, 24);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        // Store three images of different sizes.
+        let b64_1x1 = make_rgba_b64(1, 1, 255, 0, 0, 255); // 4 bytes
+        let b64_2x2 = make_rgba_b64(2, 2, 0, 255, 0, 255); // 16 bytes
+        let b64_3x3 = make_rgba_b64(3, 3, 0, 0, 255, 255); // 36 bytes
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=t,f=32,s=1,v=1,i=1;{b64_1x1}\x1b\\").as_bytes());
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=t,f=32,s=2,v=2,i=2;{b64_2x2}\x1b\\").as_bytes());
+        feed_bytes(&mut term,
+            format!("\x1b_Ga=t,f=32,s=3,v=3,i=3;{b64_3x3}\x1b\\").as_bytes());
+
+        assert_eq!(term.graphics.kitty_state.images.len(), 3);
+        assert_eq!(term.graphics.kitty_state.used_memory, 4 + 16 + 36);
+
+        // Delete one, verify memory adjusts.
+        feed_bytes(&mut term, b"\x1b_Ga=d,d=i,i=2\x1b\\");
+        assert_eq!(term.graphics.kitty_state.images.len(), 2);
+        assert_eq!(term.graphics.kitty_state.used_memory, 4 + 36);
+
+        // Delete all, verify zero.
+        feed_bytes(&mut term, b"\x1b_Ga=d,d=a\x1b\\");
+        assert_eq!(term.graphics.kitty_state.used_memory, 0);
     }
 }
