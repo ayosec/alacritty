@@ -205,7 +205,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         };
 
         // Get the action of a key binding.
-        let mut binding_action = |binding: &KeyBinding| {
+        let mut binding_action = |binding: &KeyBinding, ctx: &A| {
             let key = match (&binding.trigger, &logical_key) {
                 (BindingKey::Scancode(_), _) => BindingKey::Scancode(key.physical_key),
                 (_, code) => {
@@ -217,6 +217,11 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
                 // Pass through the key if any of the bindings has the `ReceiveChar` action.
                 *suppress_chars.get_or_insert(true) &= binding.action != Action::ReceiveChar;
 
+                // Pass through the key if any of the bindings has the `CopyDynamic` action and the selection is empty.
+                if binding.action == Action::CopyDynamic && ctx.selection_is_empty() {
+                    suppress_chars = Some(false);
+                }
+
                 // Binding was triggered; run the action.
                 Some(binding.action.clone())
             } else {
@@ -227,7 +232,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         // Trigger matching key bindings.
         for i in 0..self.ctx.config().key_bindings().len() {
             let binding = &self.ctx.config().key_bindings()[i];
-            if let Some(action) = binding_action(binding) {
+            if let Some(action) = binding_action(binding, &self.ctx) {
                 action.execute(&mut self.ctx);
             }
         }
@@ -240,7 +245,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
                 None => continue,
             };
 
-            if let Some(action) = binding_action(binding) {
+            if let Some(action) = binding_action(binding, &self.ctx) {
                 action.execute(&mut self.ctx);
             }
         }
