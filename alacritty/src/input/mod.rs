@@ -321,6 +321,7 @@ impl<T: EventListener> Execute<T> for Action {
             Action::SearchForward => ctx.start_search(Direction::Right),
             Action::SearchBackward => ctx.start_search(Direction::Left),
             Action::Copy => ctx.copy_selection(ClipboardType::Clipboard),
+            Action::CopyDynamic => { if !ctx.selection_is_empty() { ctx.copy_selection(ClipboardType::Clipboard); ctx.clear_selection(); } },
             #[cfg(not(any(target_os = "macos", windows)))]
             Action::CopySelection => ctx.copy_selection(ClipboardType::Selection),
             Action::ClearSelection => ctx.clear_selection(),
